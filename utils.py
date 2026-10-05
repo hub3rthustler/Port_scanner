@@ -1,86 +1,98 @@
-### utils.py
-# Helper functions for PortScanApp
+"""Helper functions for PortScanApp."""
 
-import socket
-import re
+from __future__ import annotations
+
+import ipaddress
 
 
-def validate_target(target):
+MIN_PORT = 1
+MAX_PORT = 65_535
+
+
+def validate_target(target: str) -> bool:
+    """Return whether *target* is a valid IP address or DNS hostname.
+
+    Name resolution is deliberately left to the scanner so validation never
+    blocks the Tkinter event loop.
+    """
+    target = target.strip()
+    if not target or len(target) > 253:
+        return False
+
     try:
-        socket.inet_aton(target)
+        ipaddress.ip_address(target)
         return True
-    except socket.error:
+    except ValueError:
         pass
 
-    domain_regex = re.compile(
-        r'^(?:[a-zA-Z0-9]'
-        r'(?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+'
-        r'[a-zA-Z]{2,6}$'
+    # A trailing dot is valid for a fully qualified DNS name.
+    hostname = target[:-1] if target.endswith(".") else target
+    if not hostname:
+        return False
+
+    try:
+        ascii_hostname = hostname.encode("idna").decode("ascii")
+    except UnicodeError:
+        return False
+
+    if len(ascii_hostname) > 253:
+        return False
+
+    labels = ascii_hostname.split(".")
+    if len(labels) > 1 and all(label.isdigit() for label in labels):
+        return False
+    return all(
+        label
+        and len(label) <= 63
+        and label[0].isalnum()
+        and label[-1].isalnum()
+        and all(character.isalnum() or character == "-" for character in label)
+        for label in labels
     )
-    if domain_regex.match(target):
-        return True
-
-    return False
 
 
-def parse_port_range(port_input):
-    """
-    Parses port input into a sorted list of unique port numbers.
+def parse_port_range(port_input: str) -> list[int] | None:
+    """Parse a comma-separated list of ports and inclusive port ranges.
 
-    Supported formats:
-      - Single port:        "80"
-      - Range:              "20-80"
-      - Comma-separated:    "22,80,443"
-      - Mixed:              "22,80-100,443,8080-8090"
-
-    Returns a sorted list of ints, or None if input is invalid.
+    Examples include ``80``, ``20-80`` and ``22,80-100,443``. A sorted list
+    of unique ports is returned, or ``None`` when the input is invalid.
     """
     if not port_input or not port_input.strip():
         return None
 
-    ports = set()
-
-    segments = [s.strip() for s in port_input.split(',')]
+    ports: set[int] = set()
+    segments = [segment.strip() for segment in port_input.split(",")]
 
     for segment in segments:
         if not segment:
             return None
 
-        if '-' in segment:
-            # Could be a range like "80-100"
-            parts = segment.split('-')
+        if "-" in segment:
+            parts = segment.split("-")
             if len(parts) != 2:
                 return None
             try:
-                start, end = int(parts[0].strip()), int(parts[1].strip())
+                start, end = (int(part.strip()) for part in parts)
             except ValueError:
                 return None
 
-            if not (0 <= start <= 65535 and 0 <= end <= 65535):
+            if not (MIN_PORT <= start <= end <= MAX_PORT):
                 return None
-            if start > end:
-                return None
-
             ports.update(range(start, end + 1))
         else:
-            # Single port
             try:
                 port = int(segment)
             except ValueError:
                 return None
 
-            if not (0 <= port <= 65535):
+            if not MIN_PORT <= port <= MAX_PORT:
                 return None
-
             ports.add(port)
 
-    if not ports:
-        return None
-
-    return sorted(ports)
+    return sorted(ports) if ports else None
 
 
-def format_port_count(ports):
-    """Returns a human-readable string with the port count."""
-    n = len(ports)
-    return f"{n} port{'s' if n != 1 else ''}"
+def format_port_count(ports: list[int]) -> str:
+    """Return a human-readable English port count."""
+    count = len(ports)
+    return f"{count} port{'s' if count != 1 else ''}"
